@@ -8,8 +8,8 @@ app.use(express.json());
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 // Fill these in after creating your Spotify app at developer.spotify.com
-const SPOTIFY_CLIENT_ID = a51eaa6e7a494e46bffab05a36a6e183;
-const SPOTIFY_CLIENT_SECRET = b3a303a1517042859ebe86cca55a7869;
+const SPOTIFY_CLIENT_ID = "a51eaa6e7a494e46bffab05a36a6e183";
+const SPOTIFY_CLIENT_SECRET = "b3a303a1517042859ebe86cca55a7869";
 
 // This must exactly match what you put in your Spotify app's Redirect URIs
 // e.g. https://your-railway-app.up.railway.app/callback
