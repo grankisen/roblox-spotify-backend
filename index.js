@@ -164,27 +164,64 @@ app.get("/", (req, res) => {
         <h1>Link Spotify to Roblox</h1>
         <p>Enter your Roblox username to connect your Spotify account and show friends what you're listening to.</p>
         <input type="text" id="username" placeholder="Your Roblox username" />
-        <button onclick="link()">Connect Spotify</button>
+        <button id="connectBtn" onclick="link()">Connect Spotify</button>
+        <p id="errorMsg" style="color:#e8385a;margin-top:10px;display:none;"></p>
         <p class="note">Your username is used to link your Spotify to your Roblox account. We don't store passwords.</p>
       </div>
       <script>
         async function link() {
           const username = document.getElementById('username').value.trim();
-          if (!username) return alert('Enter your Roblox username');
+          const btn = document.getElementById('connectBtn');
+          const errMsg = document.getElementById('errorMsg');
+          errMsg.style.display = 'none';
+          if (!username) { showError('Enter your Roblox username.'); return; }
+          btn.textContent = 'Looking up...';
+          btn.disabled = true;
           try {
-            // Look up their Roblox user ID from username
-            const res = await fetch('https://api.roblox.com/users/get-by-username?username=' + encodeURIComponent(username));
+            const res = await fetch('/lookup?username=' + encodeURIComponent(username));
             const data = await res.json();
-            if (!data.Id) return alert('Roblox username not found. Check spelling.');
-            window.location.href = '/auth?robloxUserId=' + data.Id;
+            if (!data.id) { showError(data.error || 'Username not found. Check spelling.'); return; }
+            window.location.href = '/auth?robloxUserId=' + data.id;
           } catch(e) {
-            alert('Could not reach Roblox API. Try again.');
+            showError('Something went wrong. Please try again.');
+          } finally {
+            btn.textContent = 'Connect Spotify';
+            btn.disabled = false;
+          }
+          function showError(msg) {
+            errMsg.textContent = msg;
+            errMsg.style.display = 'block';
           }
         }
       </script>
     </body>
     </html>
   `);
+});
+
+// Username → Roblox ID lookup (server-side, avoids CORS issues)
+// Uses the current Roblox users API
+app.get("/lookup", async (req, res) => {
+  const { username } = req.query;
+  if (!username) return res.status(400).json({ error: "Missing username" });
+
+  try {
+    const response = await axios.post(
+      "https://users.roblox.com/v1/usernames/users",
+      { usernames: [username], excludeBannedUsers: true },
+      { headers: { "Content-Type": "application/json" } }
+    );
+
+    const users = response.data.data;
+    if (!users || users.length === 0) {
+      return res.json({ error: "Roblox username not found. Check spelling." });
+    }
+
+    res.json({ id: users[0].id, name: users[0].name });
+  } catch (err) {
+    console.error("Roblox lookup failed:", err.response?.data || err.message);
+    res.status(500).json({ error: "Could not reach Roblox. Try again shortly." });
+  }
 });
 
 // Step 1: Redirect user to Spotify login
