@@ -1,375 +1,255 @@
 const express = require("express");
-const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
+const axios   = require("axios");
+const fs      = require("fs");
+const path    = require("path");
 
 const app = express();
 app.use(express.json());
 
-// ─── CONFIG ──────────────────────────────────────────────────────────────────
-// Fill these in after creating your Spotify app at developer.spotify.com
-const SPOTIFY_CLIENT_ID = "a51eaa6e7a494e46bffab05a36a6e183";
-const SPOTIFY_CLIENT_SECRET = "b3a303a1517042859ebe86cca55a7869";
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+// Get a free API key at: https://www.last.fm/api/account/create
+const LASTFM_API_KEY = "d614aa71c5c00c5d56776a1256f7a63c";
+const LASTFM_BASE    = "https://ws.audioscrobbler.com/2.0/";
 
-// This must exactly match what you put in your Spotify app's Redirect URIs
-// e.g. https://your-railway-app.up.railway.app/callback
-const REDIRECT_URI = "https://roblox-spotify-backend-production.up.railway.app/callback";
-
-const SCOPES = [
-  "user-read-currently-playing",
-  "user-read-playback-state",
-  "user-top-read",
-].join(" ");
-
-// ─── SIMPLE FILE-BASED DATABASE ──────────────────────────────────────────────
-// Stores { robloxUserId: { accessToken, refreshToken, expiresAt } }
+// ─── FILE DATABASE ────────────────────────────────────────────────────────────
+// Stores { robloxUserId: "lastfmUsername" }
 const DB_PATH = path.join(__dirname, "db.json");
 
 function readDB() {
   if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, "{}");
-  return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+  try { return JSON.parse(fs.readFileSync(DB_PATH, "utf8")); }
+  catch { return {}; }
 }
 
-function writeDB(data) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
-}
-
-function saveUser(robloxUserId, tokens) {
+function saveLink(robloxUserId, lastfmUsername) {
   const db = readDB();
-  db[String(robloxUserId)] = {
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-    expiresAt: Date.now() + tokens.expires_in * 1000,
-  };
-  writeDB(db);
+  db[String(robloxUserId)] = lastfmUsername.trim().toLowerCase();
+  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
 }
 
-function getUser(robloxUserId) {
-  const db = readDB();
-  return db[String(robloxUserId)] || null;
+function getLastfmUsername(robloxUserId) {
+  return readDB()[String(robloxUserId)] || null;
 }
 
-// ─── TOKEN REFRESH ────────────────────────────────────────────────────────────
-async function refreshAccessToken(robloxUserId) {
-  const user = getUser(robloxUserId);
-  if (!user) return null;
-
-  try {
-    const response = await axios.post(
-      "https://accounts.spotify.com/api/token",
-      new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: user.refreshToken,
-        client_id: SPOTIFY_CLIENT_ID,
-        client_secret: SPOTIFY_CLIENT_SECRET,
-      }),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-    );
-
-    const db = readDB();
-    db[String(robloxUserId)].accessToken = response.data.access_token;
-    db[String(robloxUserId)].expiresAt =
-      Date.now() + response.data.expires_in * 1000;
-    if (response.data.refresh_token) {
-      db[String(robloxUserId)].refreshToken = response.data.refresh_token;
-    }
-    writeDB(db);
-    return response.data.access_token;
-  } catch (err) {
-    console.error("Token refresh failed:", err.response?.data || err.message);
-    return null;
-  }
+// ─── LAST.FM HELPERS ──────────────────────────────────────────────────────────
+async function lfmGet(params) {
+  const res = await axios.get(LASTFM_BASE, {
+    params: { ...params, api_key: LASTFM_API_KEY, format: "json" },
+    timeout: 8000,
+  });
+  return res.data;
 }
 
-async function getValidToken(robloxUserId) {
-  const user = getUser(robloxUserId);
-  if (!user) return null;
-  if (Date.now() < user.expiresAt - 30000) return user.accessToken;
-  return await refreshAccessToken(robloxUserId);
-}
-
-// ─── ROUTES ───────────────────────────────────────────────────────────────────
-
-// Home page - players visit this to link their Spotify
+// ─── HOME PAGE ────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-      <title>Link Spotify to Roblox</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-          background: #0a0a0a;
-          color: #f0f0f0;
-          font-family: 'Segoe UI', sans-serif;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          min-height: 100vh;
-          gap: 24px;
-          padding: 20px;
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Link Last.fm to Roblox</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#0a0a0a;color:#f0f0f0;font-family:'Segoe UI',sans-serif;
+         display:flex;flex-direction:column;align-items:center;justify-content:center;
+         min-height:100vh;padding:20px}
+    .card{background:#111;border:1px solid #222;border-radius:20px;padding:40px;
+          max-width:440px;width:100%;text-align:center}
+    .logo{width:64px;height:64px;border-radius:50%;background:#d51007;
+          display:flex;align-items:center;justify-content:center;
+          margin:0 auto 20px;font-size:32px}
+    h1{font-size:22px;margin-bottom:8px}
+    p{color:#888;font-size:14px;line-height:1.6;margin-bottom:20px}
+    .steps{text-align:left;margin-bottom:24px;padding:16px;background:#1a1a1a;
+           border-radius:10px;font-size:13px;color:#aaa;line-height:2}
+    .steps b{color:#f0f0f0}
+    .row{display:flex;gap:10px;margin-bottom:12px}
+    input{flex:1;padding:12px 16px;background:#1a1a1a;border:1px solid #333;
+          border-radius:10px;color:#fff;font-size:14px;outline:none}
+    input:focus{border-color:#d51007}
+    button{width:100%;padding:13px;background:#d51007;border:none;border-radius:10px;
+           color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+    button:hover{background:#f01208}
+    button:disabled{opacity:0.6;cursor:not-allowed}
+    #msg{font-size:13px;margin-top:14px;min-height:18px}
+    .note{font-size:11px;color:#555;margin-top:14px}
+    a{color:#d51007}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🎵</div>
+    <h1>Link Last.fm to Roblox</h1>
+    <div class="steps">
+      <b>How to set up (one time):</b><br>
+      1. Create a free account at <a href="https://www.last.fm" target="_blank">last.fm</a><br>
+      2. Connect Spotify in Last.fm settings → <b>Applications</b><br>
+      3. Enter your details below and click Link
+    </div>
+    <div class="row">
+      <input id="roblox"  placeholder="Roblox username" />
+      <input id="lastfm"  placeholder="Last.fm username" />
+    </div>
+    <button id="btn" onclick="link()">Link Account</button>
+    <div id="msg"></div>
+    <p class="note">We only store your Last.fm username — no passwords, no private data.</p>
+  </div>
+  <script>
+    async function link() {
+      const roblox = document.getElementById('roblox').value.trim();
+      const lastfm = document.getElementById('lastfm').value.trim();
+      const btn    = document.getElementById('btn');
+      const msg    = document.getElementById('msg');
+      msg.style.color = '#888'; msg.textContent = '';
+      if (!roblox || !lastfm) { showMsg('Fill in both fields.', '#e8385a'); return; }
+      btn.disabled = true; btn.textContent = 'Checking...';
+      try {
+        const res  = await fetch('/link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ robloxUsername: roblox, lastfmUsername: lastfm })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showMsg('✓ Linked! Open Roblox and start playing music on Spotify.', '#1DB954');
+          btn.textContent = 'Linked ✓';
+        } else {
+          showMsg(data.error || 'Something went wrong.', '#e8385a');
+          btn.disabled = false; btn.textContent = 'Link Account';
         }
-        .card {
-          background: #111;
-          border: 1px solid #222;
-          border-radius: 20px;
-          padding: 40px;
-          max-width: 420px;
-          width: 100%;
-          text-align: center;
-        }
-        .logo {
-          width: 64px; height: 64px; border-radius: 50%;
-          background: #1DB954;
-          display: flex; align-items: center; justify-content: center;
-          margin: 0 auto 20px;
-          font-size: 32px;
-        }
-        h1 { font-size: 22px; margin-bottom: 8px; }
-        p { color: #888; font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
-        input {
-          width: 100%;
-          padding: 12px 16px;
-          background: #1a1a1a;
-          border: 1px solid #333;
-          border-radius: 10px;
-          color: #fff;
-          font-size: 14px;
-          margin-bottom: 12px;
-          outline: none;
-        }
-        input:focus { border-color: #1DB954; }
-        button {
-          width: 100%;
-          padding: 13px;
-          background: #1DB954;
-          border: none;
-          border-radius: 10px;
-          color: #000;
-          font-size: 15px;
-          font-weight: 700;
-          cursor: pointer;
-        }
-        button:hover { background: #22d460; }
-        .note { font-size: 12px; color: #555; margin-top: 16px; }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <div class="logo">🎵</div>
-        <h1>Link Spotify to Roblox</h1>
-        <p>Enter your Roblox username to connect your Spotify account and show friends what you're listening to.</p>
-        <input type="text" id="username" placeholder="Your Roblox username" />
-        <button id="connectBtn" onclick="link()">Connect Spotify</button>
-        <p id="errorMsg" style="color:#e8385a;margin-top:10px;display:none;"></p>
-        <p class="note">Your username is used to link your Spotify to your Roblox account. We don't store passwords.</p>
-      </div>
-      <script>
-        async function link() {
-          const username = document.getElementById('username').value.trim();
-          const btn = document.getElementById('connectBtn');
-          const errMsg = document.getElementById('errorMsg');
-          errMsg.style.display = 'none';
-          if (!username) { showError('Enter your Roblox username.'); return; }
-          btn.textContent = 'Looking up...';
-          btn.disabled = true;
-          try {
-            const res = await fetch('/lookup?username=' + encodeURIComponent(username));
-            const data = await res.json();
-            if (!data.id) { showError(data.error || 'Username not found. Check spelling.'); return; }
-            window.location.href = '/auth?robloxUserId=' + data.id;
-          } catch(e) {
-            showError('Something went wrong. Please try again.');
-          } finally {
-            btn.textContent = 'Connect Spotify';
-            btn.disabled = false;
-          }
-          function showError(msg) {
-            errMsg.textContent = msg;
-            errMsg.style.display = 'block';
-          }
-        }
-      </script>
-    </body>
-    </html>
-  `);
+      } catch(e) {
+        showMsg('Network error. Try again.', '#e8385a');
+        btn.disabled = false; btn.textContent = 'Link Account';
+      }
+    }
+    function showMsg(text, color) {
+      const m = document.getElementById('msg');
+      m.style.color = color; m.textContent = text;
+    }
+  </script>
+</body>
+</html>`);
 });
 
-// Username → Roblox ID lookup (server-side, avoids CORS issues)
-// Uses the current Roblox users API
-app.get("/lookup", async (req, res) => {
-  const { username } = req.query;
-  if (!username) return res.status(400).json({ error: "Missing username" });
+// ─── LINK ENDPOINT ────────────────────────────────────────────────────────────
+// POST /link  { robloxUsername, lastfmUsername }
+// Validates both accounts exist then saves the link
+app.post("/link", async (req, res) => {
+  const { robloxUsername, lastfmUsername } = req.body;
+  if (!robloxUsername || !lastfmUsername)
+    return res.json({ ok: false, error: "Missing fields." });
 
+  // 1. Look up Roblox user ID
+  let robloxId;
   try {
-    const response = await axios.post(
+    const r = await axios.post(
       "https://users.roblox.com/v1/usernames/users",
-      { usernames: [username], excludeBannedUsers: true },
+      { usernames: [robloxUsername], excludeBannedUsers: true },
       { headers: { "Content-Type": "application/json" } }
     );
-
-    const users = response.data.data;
-    if (!users || users.length === 0) {
-      return res.json({ error: "Roblox username not found. Check spelling." });
-    }
-
-    res.json({ id: users[0].id, name: users[0].name });
-  } catch (err) {
-    console.error("Roblox lookup failed:", err.response?.data || err.message);
-    res.status(500).json({ error: "Could not reach Roblox. Try again shortly." });
+    const users = r.data.data;
+    if (!users || users.length === 0)
+      return res.json({ ok: false, error: "Roblox username not found. Check spelling." });
+    robloxId = users[0].id;
+  } catch {
+    return res.json({ ok: false, error: "Could not reach Roblox. Try again." });
   }
-});
 
-// Step 1: Redirect user to Spotify login
-app.get("/auth", (req, res) => {
-  const { robloxUserId } = req.query;
-  if (!robloxUserId) return res.status(400).send("Missing robloxUserId");
-
-  const params = new URLSearchParams({
-    client_id: SPOTIFY_CLIENT_ID,
-    response_type: "code",
-    redirect_uri: REDIRECT_URI,
-    scope: SCOPES,
-    state: String(robloxUserId), // we pass the roblox ID through state
-  });
-
-  res.redirect("https://accounts.spotify.com/authorize?" + params.toString());
-});
-
-// Step 2: Spotify sends user back here with a code
-app.get("/callback", async (req, res) => {
-  const { code, state: robloxUserId, error } = req.query;
-
-  if (error) return res.send("Spotify login was cancelled.");
-  if (!code || !robloxUserId) return res.status(400).send("Bad callback");
-
+  // 2. Verify Last.fm user exists
   try {
-    const response = await axios.post(
-      "https://accounts.spotify.com/api/token",
-      new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: REDIRECT_URI,
-        client_id: SPOTIFY_CLIENT_ID,
-        client_secret: SPOTIFY_CLIENT_SECRET,
-      }),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-    );
-
-    saveUser(robloxUserId, response.data);
-
-    res.send(`
-      <!DOCTYPE html>
-      <html><head><title>Linked!</title>
-      <style>
-        body { background:#0a0a0a; color:#f0f0f0; font-family:'Segoe UI',sans-serif;
-               display:flex; align-items:center; justify-content:center; min-height:100vh; }
-        .card { background:#111; border:1px solid #222; border-radius:20px; padding:40px;
-                text-align:center; max-width:360px; }
-        h1 { color:#1DB954; margin-bottom:12px; }
-        p { color:#888; font-size:14px; }
-      </style></head>
-      <body><div class="card">
-        <h1>✓ Spotify Linked!</h1>
-        <p>You're all set! Join any game and your music will show up for others to see.</p>
-      </div></body></html>
-    `);
-  } catch (err) {
-    console.error("Token exchange failed:", err.response?.data || err.message);
-    res.status(500).send("Failed to link Spotify. Please try again.");
+    const data = await lfmGet({ method: "user.getinfo", user: lastfmUsername });
+    if (data.error || !data.user)
+      return res.json({ ok: false, error: "Last.fm username not found. Check spelling." });
+  } catch {
+    return res.json({ ok: false, error: "Could not reach Last.fm. Try again." });
   }
+
+  // 3. Save link
+  saveLink(robloxId, lastfmUsername);
+  console.log(`Linked Roblox ${robloxUsername} (${robloxId}) → Last.fm ${lastfmUsername}`);
+  res.json({ ok: true });
 });
 
-// ─── API ENDPOINTS (called by Roblox) ────────────────────────────────────────
-
-// GET /api/nowplaying?userId=123456
-// Returns the player's currently playing track
+// ─── API: NOW PLAYING ─────────────────────────────────────────────────────────
+// GET /api/nowplaying?userId=ROBLOX_ID
 app.get("/api/nowplaying", async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
 
-  const token = await getValidToken(userId);
-  if (!token) return res.json({ linked: false });
+  const lfmUser = getLastfmUsername(userId);
+  if (!lfmUser) return res.json({ linked: false });
 
   try {
-    const response = await axios.get(
-      "https://api.spotify.com/v1/me/player/currently-playing",
-      { headers: { Authorization: "Bearer " + token } }
-    );
+    const data = await lfmGet({
+      method:    "user.getrecenttracks",
+      user:      lfmUser,
+      limit:     1,
+      extended:  0,
+    });
 
-    if (response.status === 204 || !response.data || !response.data.item) {
-      return res.json({ linked: true, playing: false });
-    }
+    if (data.error) return res.json({ linked: false });
 
-    const track = response.data.item;
+    const tracks = data.recenttracks?.track;
+    if (!tracks || tracks.length === 0) return res.json({ linked: true, playing: false });
+
+    const track   = Array.isArray(tracks) ? tracks[0] : tracks;
+    const playing = track["@attr"]?.nowplaying === "true";
+
+    if (!playing) return res.json({ linked: true, playing: false });
+
     res.json({
-      linked: true,
-      playing: true,
-      trackName: track.name,
-      artistName: track.artists.map((a) => a.name).join(", "),
-      albumName: track.album.name,
-      progressMs: response.data.progress_ms,
-      durationMs: track.duration_ms,
+      linked:     true,
+      playing:    true,
+      trackName:  track.name        || "",
+      artistName: track.artist["#text"] || track.artist || "",
+      albumName:  track.album["#text"]  || track.album  || "",
+      // Last.fm doesn't expose progress — clients animate locally from 0
+      progressMs: 0,
+      durationMs: 0,
     });
   } catch (err) {
-    if (err.response?.status === 401) {
-      return res.json({ linked: false });
-    }
-    res.status(500).json({ error: "Spotify API error" });
+    console.error("Last.fm nowplaying error:", err.message);
+    res.status(500).json({ error: "Last.fm API error" });
   }
 });
 
-// GET /api/profile?userId=123456
-// Returns top track + top artist for the profile card
+// ─── API: PROFILE (top track + top artist) ────────────────────────────────────
+// GET /api/profile?userId=ROBLOX_ID
 app.get("/api/profile", async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
 
-  const token = await getValidToken(userId);
-  if (!token) return res.json({ linked: false });
+  const lfmUser = getLastfmUsername(userId);
+  if (!lfmUser) return res.json({ linked: false });
 
   try {
-    const [topTracksRes, topArtistsRes] = await Promise.all([
-      axios.get(
-        "https://api.spotify.com/v1/me/top/tracks?limit=1&time_range=long_term",
-        { headers: { Authorization: "Bearer " + token } }
-      ),
-      axios.get(
-        "https://api.spotify.com/v1/me/top/artists?limit=1&time_range=long_term",
-        { headers: { Authorization: "Bearer " + token } }
-      ),
+    const [tracksData, artistsData] = await Promise.all([
+      lfmGet({ method: "user.gettoptracks", user: lfmUser, period: "overall", limit: 1 }),
+      lfmGet({ method: "user.gettopartists", user: lfmUser, period: "overall", limit: 1 }),
     ]);
 
-    const topTrack = topTracksRes.data.items[0];
-    const topArtist = topArtistsRes.data.items[0];
+    const topTrack  = tracksData.toptracks?.track?.[0];
+    const topArtist = artistsData.topartists?.artist?.[0];
 
     res.json({
-      linked: true,
-      topTrack: topTrack
-        ? { name: topTrack.name, artist: topTrack.artists[0].name }
-        : null,
+      linked:    true,
+      topTrack:  topTrack  ? { name: topTrack.name,  artist: topTrack.artist?.name || "" } : null,
       topArtist: topArtist ? { name: topArtist.name } : null,
     });
   } catch (err) {
-    res.status(500).json({ error: "Spotify API error" });
+    console.error("Last.fm profile error:", err.message);
+    res.status(500).json({ error: "Last.fm API error" });
   }
 });
 
-// GET /api/linked?userId=123456
-// Quick check: has this user linked Spotify?
+// ─── API: LINKED CHECK ────────────────────────────────────────────────────────
+// GET /api/linked?userId=ROBLOX_ID
 app.get("/api/linked", (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
-  const user = getUser(userId);
-  res.json({ linked: !!user });
+  res.json({ linked: !!getLastfmUsername(userId) });
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
