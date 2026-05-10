@@ -8,12 +8,12 @@ app.use(express.json());
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 // Fill these in after creating your Spotify app at developer.spotify.com
-const SPOTIFY_CLIENT_ID = "YOUR_SPOTIFY_CLIENT_ID";
-const SPOTIFY_CLIENT_SECRET = "YOUR_SPOTIFY_CLIENT_SECRET";
+const SPOTIFY_CLIENT_ID = "a51eaa6e7a494e46bffab05a36a6e183";
+const SPOTIFY_CLIENT_SECRET = "b3a303a1517042859ebe86cca55a7869";
 
 // This must exactly match what you put in your Spotify app's Redirect URIs
 // e.g. https://your-railway-app.up.railway.app/callback
-const REDIRECT_URI = "YOUR_REDIRECT_URI_HERE";
+const REDIRECT_URI = "https://roblox-spotify-backend-production.up.railway.app/callback";
 
 const SCOPES = [
   "user-read-currently-playing",
