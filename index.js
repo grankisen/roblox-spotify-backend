@@ -131,7 +131,29 @@ app.get("/", (req, res) => {
 </html>`);
 });
 
-// ─── LINK ENDPOINT ────────────────────────────────────────────────────────────
+// ─── LINK BY ID (called from inside Roblox game) ─────────────────────────────
+// POST /api/linkbyid  { robloxUserId, lastfmUsername }
+// Roblox already knows the user ID so no username lookup needed.
+app.post("/api/linkbyid", async (req, res) => {
+  const { robloxUserId, lastfmUsername } = req.body;
+  if (!robloxUserId || !lastfmUsername)
+    return res.json({ ok: false, error: "Missing fields." });
+
+  // Verify Last.fm user exists
+  try {
+    const data = await lfmGet({ method: "user.getinfo", user: lastfmUsername.trim() });
+    if (data.error || !data.user)
+      return res.json({ ok: false, error: "Last.fm username not found. Check spelling." });
+  } catch {
+    return res.json({ ok: false, error: "Could not reach Last.fm. Try again." });
+  }
+
+  saveLink(robloxUserId, lastfmUsername.trim());
+  console.log(`In-game link: Roblox ${robloxUserId} → Last.fm ${lastfmUsername}`);
+  res.json({ ok: true });
+});
+
+// ─── LINK ENDPOINT (web page form) ────────────────────────────────────────────
 // POST /link  { robloxUsername, lastfmUsername }
 // Validates both accounts exist then saves the link
 app.post("/link", async (req, res) => {
