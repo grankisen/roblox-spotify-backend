@@ -219,15 +219,35 @@ app.get("/api/nowplaying", async (req, res) => {
 
     if (!playing) return res.json({ linked: true, playing: false });
 
+    const trackName  = track.name || "";
+    const artistName = track.artist?.["#text"] || track.artist || "";
+    const albumName  = track.album?.["#text"]  || track.album  || "";
+
+    // Fetch duration from track.getInfo in parallel — returns ms e.g. "240000"
+    let durationMs = 0;
+    try {
+      const info = await lfmGet({
+        method:      "track.getInfo",
+        track:       trackName,
+        artist:      artistName,
+        autocorrect: 1,
+      });
+      const rawDuration = info?.track?.duration;
+      if (rawDuration && rawDuration !== "0") {
+        durationMs = parseInt(rawDuration, 10);
+      }
+    } catch (e) {
+      // Duration unavailable — not fatal, client will show elapsed timer only
+    }
+
     res.json({
       linked:     true,
       playing:    true,
-      trackName:  track.name        || "",
-      artistName: track.artist["#text"] || track.artist || "",
-      albumName:  track.album["#text"]  || track.album  || "",
-      // Last.fm doesn't expose progress — clients animate locally from 0
-      progressMs: 0,
-      durationMs: 0,
+      trackName,
+      artistName,
+      albumName,
+      progressMs: 0,      // Last.fm gives no playback position
+      durationMs,         // real duration in ms from track.getInfo
     });
   } catch (err) {
     console.error("Last.fm nowplaying error:", err.message);
