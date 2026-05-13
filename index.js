@@ -239,13 +239,16 @@ app.get("/api/nowplaying", async (req, res) => {
       // Niche level — based on global listener count.
       // Higher listener count = mainstream, lower = niche.
       const listeners = parseInt(info?.track?.listeners || "0", 10);
-      // Map listeners to a "niche %" using log scale:
-      //   >= 5M listeners → 0% niche (mainstream)
-      //   <= 1k listeners → 100% niche (very obscure)
+      // Map listeners to a "niche %" using log scale, tuned for Last.fm:
+      //   >= 5M listeners → ~5% (mainstream, biggest hits)
+      //   2M listeners    → ~17% (still mainstream territory)
+      //   500k listeners  → ~33% (well-known)
+      //   50k listeners   → ~58% (underground)
+      //   <= 1k listeners → 100% (deep cut)
       let nichePercent = 0;
       if (listeners > 0) {
-        const l = Math.log10(listeners);    // 3 (1k) → 6.7 (5M)
-        nichePercent = Math.max(0, Math.min(100, Math.round((6.7 - l) / 3.7 * 100)));
+        const l = Math.log10(listeners);
+        nichePercent = Math.max(0, Math.min(100, Math.round((7 - l) / 4 * 100)));
       } else {
         nichePercent = 100;
       }
