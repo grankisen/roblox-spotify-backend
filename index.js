@@ -236,8 +236,22 @@ app.get("/api/nowplaying", async (req, res) => {
       if (rawDuration && rawDuration !== "0") {
         durationMs = parseInt(rawDuration, 10);
       }
+      // Niche level — based on global listener count.
+      // Higher listener count = mainstream, lower = niche.
+      const listeners = parseInt(info?.track?.listeners || "0", 10);
+      // Map listeners to a "niche %" using log scale:
+      //   >= 5M listeners → 0% niche (mainstream)
+      //   <= 1k listeners → 100% niche (very obscure)
+      let nichePercent = 0;
+      if (listeners > 0) {
+        const l = Math.log10(listeners);    // 3 (1k) → 6.7 (5M)
+        nichePercent = Math.max(0, Math.min(100, Math.round((6.7 - l) / 3.7 * 100)));
+      } else {
+        nichePercent = 100;
+      }
+      var nichePct = nichePercent;
     } catch (e) {
-      // Duration unavailable — not fatal, client will show elapsed timer only
+      var nichePct = 0;
     }
 
     res.json({
@@ -246,8 +260,9 @@ app.get("/api/nowplaying", async (req, res) => {
       trackName,
       artistName,
       albumName,
-      progressMs: 0,      // Last.fm gives no playback position
-      durationMs,         // real duration in ms from track.getInfo
+      progressMs: 0,
+      durationMs,
+      nichePct,            // 0 = mainstream, 100 = very obscure
     });
   } catch (err) {
     console.error("Last.fm nowplaying error:", err.message);
