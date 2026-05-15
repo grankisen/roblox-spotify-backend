@@ -319,9 +319,10 @@ app.get("/api/lyrics", async (req, res) => {
   const { artist, track } = req.query;
   if (!artist || !track) return res.json({ found: false, lyrics: "" });
 
-  const headers = { "User-Agent": "TheRooftop-RobloxGame/1.0" };
+  const headers = { "User-Agent": "TheRooftop-RobloxGame/1.0 (https://roblox.com)" };
 
-  // Helper: clean raw lyrics text
+  console.log(`[lyrics] Looking up: ${artist} — ${track}`);
+
   const clean = raw => raw
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
@@ -331,64 +332,50 @@ app.get("/api/lyrics", async (req, res) => {
     .slice(0, 24)
     .join("\n");
 
-  try {
-    // First try /api/get-cached which is more forgiving than /api/get
-    // (doesn't require exact duration match)
-    let url = "https://lrclib.net/api/get-cached?"
-      + "artist_name=" + encodeURIComponent(artist)
-      + "&track_name=" + encodeURIComponent(track);
-    let resp = await fetch(url, { signal: AbortSignal.timeout(6000), headers });
-    let data = resp.ok ? await resp.json().catch(() => null) : null;
+  // Try search with various query strategies
+  const tryUrls = [
+    // Strategy 1: search with track + artist as separate params
+    "https://lrclib.net/api/search?track_name=" + encodeURIComponent(track) + "&artist_name=" + encodeURIComponent(artist),
+    // Strategy 2: search with combined q parameter
+    "https://lrclib.net/api/search?q=" + encodeURIComponent(track + " " + artist),
+    // Strategy 3: search by track name only (artist might have weird chars)
+    "https://lrclib.net/api/search?track_name=" + encodeURIComponent(track),
+  ];
 
-    // If get-cached didn't return useful data, fall back to /api/search
-    if (!data || !data.plainLyrics) {
-      const searchUrl = "https://lrclib.net/api/search?"
-        + "track_name=" + encodeURIComponent(track)
-        + "&artist_name=" + encodeURIComponent(artist);
-      const searchResp = await fetch(searchUrl, { signal: AbortSignal.timeout(6000), headers });
-      if (searchResp.ok) {
-        const results = await searchResp.json().catch(() => []);
-        // Find first result with plain lyrics
-        if (Array.isArray(results) && results.length > 0) {
-          for (const r of results) {
-            if (r.plainLyrics && r.plainLyrics.trim() !== "") {
-              data = r;
-              break;
-            }
+  for (const url of tryUrls) {
+    try {
+      console.log(`[lyrics] Trying: ${url}`);
+      const resp = await fetch(url, { signal: AbortSignal.timeout(10000), headers });
+      if (!resp.ok) {
+        console.log(`[lyrics] HTTP ${resp.status} for ${url}`);
+        continue;
+      }
+      const results = await resp.json().catch(() => null);
+      if (!Array.isArray(results)) continue;
+      console.log(`[lyrics] Got ${results.length} results`);
+      // Find first result with plain lyrics; prefer one matching artist
+      let best = null;
+      for (const r of results) {
+        if (r.plainLyrics && r.plainLyrics.trim() !== "" && !r.instrumental) {
+          if (!best) best = r;
+          if (r.artistName && r.artistName.toLowerCase().includes(artist.toLowerCase().split(" ")[0])) {
+            best = r;
+            break;
           }
         }
       }
-    }
-
-    // Last fallback — search by track name only (helps when artist has special chars)
-    if (!data || !data.plainLyrics) {
-      const searchUrl = "https://lrclib.net/api/search?q=" + encodeURIComponent(track + " " + artist);
-      const searchResp = await fetch(searchUrl, { signal: AbortSignal.timeout(6000), headers });
-      if (searchResp.ok) {
-        const results = await searchResp.json().catch(() => []);
-        if (Array.isArray(results)) {
-          for (const r of results) {
-            if (r.plainLyrics && r.plainLyrics.trim() !== "") {
-              data = r;
-              break;
-            }
-          }
-        }
+      if (best && best.plainLyrics) {
+        console.log(`[lyrics] Matched: ${best.artistName} — ${best.trackName}`);
+        const lines = clean(best.plainLyrics);
+        if (lines) return res.json({ found: true, lyrics: lines });
       }
+    } catch (e) {
+      console.error(`[lyrics] Error on ${url}: ${e.message}`);
     }
-
-    if (!data || data.instrumental || !data.plainLyrics) {
-      return res.json({ found: false, lyrics: "" });
-    }
-
-    const lines = clean(data.plainLyrics);
-    if (!lines) return res.json({ found: false, lyrics: "" });
-
-    res.json({ found: true, lyrics: lines });
-  } catch (e) {
-    console.error("[lyrics] error:", e.message);
-    res.json({ found: false, lyrics: "" });
   }
+
+  console.log(`[lyrics] Not found for: ${artist} — ${track}`);
+  res.json({ found: false, lyrics: "" });
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
