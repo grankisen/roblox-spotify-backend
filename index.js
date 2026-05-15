@@ -347,7 +347,7 @@ app.get("/api/lyrics", async (req, res) => {
       .split("\n")
       .map(l => l.trim())
       .filter(l => l.length > 0 && !l.startsWith("["))
-      .slice(0, 6)
+      .slice(0, 24)
       .join("\n");
 
     if (!lines) return res.json({ found: false, lyrics: "" });
