@@ -202,21 +202,19 @@ app.get("/api/nowplaying", async (req, res) => {
   if (!lfmUser) return res.json({ linked: false });
 
   try {
-    // Fetch 2 tracks: current (now playing) + previous (completed, has timestamp)
     const data = await lfmGet({
       method:    "user.getrecenttracks",
       user:      lfmUser,
-      limit:     2,
+      limit:     1,
       extended:  0,
     });
 
     if (data.error) return res.json({ linked: false });
 
-    const tracksRaw = data.recenttracks?.track;
-    if (!tracksRaw || tracksRaw.length === 0) return res.json({ linked: true, playing: false });
-    const trackList = Array.isArray(tracksRaw) ? tracksRaw : [tracksRaw];
+    const tracks = data.recenttracks?.track;
+    if (!tracks || tracks.length === 0) return res.json({ linked: true, playing: false });
 
-    const track   = trackList[0];
+    const track   = Array.isArray(tracks) ? tracks[0] : tracks;
     const playing = track["@attr"]?.nowplaying === "true";
 
     if (!playing) return res.json({ linked: true, playing: false });
@@ -224,11 +222,6 @@ app.get("/api/nowplaying", async (req, res) => {
     const trackName  = track.name || "";
     const artistName = track.artist?.["#text"] || track.artist || "";
     const albumName  = track.album?.["#text"]  || track.album  || "";
-
-    // Previous (completed) track — we use its scrobble timestamp + duration
-    // to estimate when the CURRENT track started playing
-    const prevTrack = trackList[1];
-    const prevScrobbleUts = prevTrack?.date?.uts ? parseInt(prevTrack.date.uts, 10) : 0;
 
     // Fetch duration, niche level, and genre from track.getInfo
     let durationMs = 0;
@@ -332,59 +325,9 @@ app.get("/api/nowplaying", async (req, res) => {
       // info lookup failed entirely
     }
 
-    // Estimate playback progress using previous track timestamps
-    let progressMs = 0;
-    console.log(`[PROGRESS] === Estimating for ${trackName} ===`);
-    console.log(`[PROGRESS] prevTrack exists: ${!!prevTrack}`);
-    if (prevTrack) {
-      console.log(`[PROGRESS] prevTrack name: ${prevTrack.name}`);
-      console.log(`[PROGRESS] prevTrack date: ${JSON.stringify(prevTrack.date)}`);
-      console.log(`[PROGRESS] prevScrobbleUts: ${prevScrobbleUts}`);
-    }
-
-    if (prevScrobbleUts > 0) {
-      try {
-        const prevArtist = prevTrack.artist?.["#text"] || prevTrack.artist || "";
-        const prevName   = prevTrack.name || "";
-        console.log(`[PROGRESS] Fetching duration for prev: "${prevArtist}" — "${prevName}"`);
-
-        const prevInfo = await lfmGet({
-          method:      "track.getInfo",
-          track:       prevName,
-          artist:      prevArtist,
-          autocorrect: 1,
-        });
-        const prevDurMs = parseInt(prevInfo?.track?.duration || "0", 10);
-        const prevDurationSec = prevDurMs > 0 ? Math.floor(prevDurMs / 1000) : 0;
-        console.log(`[PROGRESS] prevDurationSec: ${prevDurationSec} (from raw: ${prevInfo?.track?.duration})`);
-
-        // The scrobble timestamp on Last.fm is when the track FINISHED playing,
-        // not when it started. So the current track started AT prevScrobbleUts.
-        // (Earlier code assumed it started, which was wrong.)
-        const currentStartUts = prevScrobbleUts;
-        const nowUts          = Math.floor(Date.now() / 1000);
-        const elapsedSec      = nowUts - currentStartUts;
-
-        console.log(`[PROGRESS] now: ${nowUts}, start: ${currentStartUts}, elapsed: ${elapsedSec}s`);
-        console.log(`[PROGRESS] currentTrack durationMs: ${durationMs}`);
-
-        // Sanity check — drop estimate if it's clearly wrong
-        if (elapsedSec > 0 && elapsedSec < 3600) {
-          if (durationMs === 0 || elapsedSec * 1000 < durationMs + 30000) {
-            progressMs = Math.max(0, elapsedSec * 1000);
-            console.log(`[PROGRESS] ✓ Using estimate: ${progressMs}ms (${Math.floor(progressMs/1000)}s)`);
-          } else {
-            console.log(`[PROGRESS] ✗ Rejected: elapsed (${elapsedSec * 1000}ms) > duration (${durationMs}ms) + 30s buffer`);
-          }
-        } else {
-          console.log(`[PROGRESS] ✗ Rejected: elapsed out of range (${elapsedSec}s)`);
-        }
-      } catch (e) {
-        console.log(`[PROGRESS] ✗ Error fetching prev info: ${e.message}`);
-      }
-    } else {
-      console.log(`[PROGRESS] ✗ No previous scrobble timestamp available`);
-    }
+    // Last.fm doesn't expose playback position and our scrobble-based estimate
+    // was unreliable (couldn't distinguish skip from natural end). Start from 0.
+    const progressMs = 0;
 
     res.json({
       linked:     true,
