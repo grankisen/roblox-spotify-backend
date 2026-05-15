@@ -8,7 +8,7 @@ app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 // Get a free API key at: https://www.last.fm/api/account/create
-const LASTFM_API_KEY = "d614aa71c5c00c5d56776a1256f7a63c";
+const LASTFM_API_KEY = process.env.LASTFM_API_KEY || "d614aa71c5c00c5d56776a1256f7a63c";
 const LASTFM_BASE    = "https://ws.audioscrobbler.com/2.0/";
 
 // ─── FILE DATABASE ────────────────────────────────────────────────────────────
@@ -202,19 +202,21 @@ app.get("/api/nowplaying", async (req, res) => {
   if (!lfmUser) return res.json({ linked: false });
 
   try {
+    // Fetch 2 tracks: current (now playing) + previous (completed, has timestamp)
     const data = await lfmGet({
       method:    "user.getrecenttracks",
       user:      lfmUser,
-      limit:     1,
+      limit:     2,
       extended:  0,
     });
 
     if (data.error) return res.json({ linked: false });
 
-    const tracks = data.recenttracks?.track;
-    if (!tracks || tracks.length === 0) return res.json({ linked: true, playing: false });
+    const tracksRaw = data.recenttracks?.track;
+    if (!tracksRaw || tracksRaw.length === 0) return res.json({ linked: true, playing: false });
+    const trackList = Array.isArray(tracksRaw) ? tracksRaw : [tracksRaw];
 
-    const track   = Array.isArray(tracks) ? tracks[0] : tracks;
+    const track   = trackList[0];
     const playing = track["@attr"]?.nowplaying === "true";
 
     if (!playing) return res.json({ linked: true, playing: false });
@@ -222,6 +224,11 @@ app.get("/api/nowplaying", async (req, res) => {
     const trackName  = track.name || "";
     const artistName = track.artist?.["#text"] || track.artist || "";
     const albumName  = track.album?.["#text"]  || track.album  || "";
+
+    // Previous (completed) track — we use its scrobble timestamp + duration
+    // to estimate when the CURRENT track started playing
+    const prevTrack = trackList[1];
+    const prevScrobbleUts = prevTrack?.date?.uts ? parseInt(prevTrack.date.uts, 10) : 0;
 
     // Fetch duration, niche level, and genre from track.getInfo
     let durationMs = 0;
@@ -325,16 +332,52 @@ app.get("/api/nowplaying", async (req, res) => {
       // info lookup failed entirely
     }
 
+    // Estimate playback progress.
+    // Last.fm doesn't expose current position, so we approximate:
+    //   currentTrack started ≈ prevTrack scrobbleTime + prevTrack duration
+    //   progress ≈ now - currentTrackStart
+    // This is most accurate when the listener doesn't pause/skip between songs.
+    let progressMs = 0;
+    if (prevScrobbleUts > 0) {
+      try {
+        // Get the previous track's duration so we know when it likely finished
+        let prevDurationSec = 0;
+        const prevInfo = await lfmGet({
+          method:      "track.getInfo",
+          track:       prevTrack.name || "",
+          artist:      prevTrack.artist?.["#text"] || prevTrack.artist || "",
+          autocorrect: 1,
+        });
+        const prevDurMs = parseInt(prevInfo?.track?.duration || "0", 10);
+        if (prevDurMs > 0) prevDurationSec = Math.floor(prevDurMs / 1000);
+
+        // When the previous track started (in seconds since epoch)
+        const prevStartUts    = prevScrobbleUts;
+        // Last.fm scrobbles when ~50% of track played, so add duration to estimate end
+        // (or use prev scrobble as approximate end-time if duration unknown)
+        const currentStartUts = prevStartUts + prevDurationSec;
+        const nowUts          = Math.floor(Date.now() / 1000);
+        const elapsedSec      = nowUts - currentStartUts;
+
+        // Sanity check — only use if it falls within the current track's duration
+        if (elapsedSec > 0 && (durationMs === 0 || elapsedSec * 1000 < durationMs + 30000)) {
+          progressMs = Math.max(0, elapsedSec * 1000);
+        }
+      } catch (e) {
+        // Couldn't fetch previous track info — fall back to 0
+      }
+    }
+
     res.json({
       linked:     true,
       playing:    true,
       trackName,
       artistName,
       albumName,
-      progressMs: 0,
+      progressMs,
       durationMs,
       nichePct,
-      genre,               // top tag from Last.fm e.g. "indie rock", "pop"
+      genre,
     });
   } catch (err) {
     console.error("Last.fm nowplaying error:", err.message);
