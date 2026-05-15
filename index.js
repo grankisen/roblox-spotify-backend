@@ -223,8 +223,10 @@ app.get("/api/nowplaying", async (req, res) => {
     const artistName = track.artist?.["#text"] || track.artist || "";
     const albumName  = track.album?.["#text"]  || track.album  || "";
 
-    // Fetch duration from track.getInfo in parallel — returns ms e.g. "240000"
+    // Fetch duration, niche level, and genre from track.getInfo
     let durationMs = 0;
+    let nichePct   = 0;
+    let genre      = "";
     try {
       const info = await lfmGet({
         method:      "track.getInfo",
@@ -232,29 +234,67 @@ app.get("/api/nowplaying", async (req, res) => {
         artist:      artistName,
         autocorrect: 1,
       });
+
+      // Duration
       const rawDuration = info?.track?.duration;
       if (rawDuration && rawDuration !== "0") {
         durationMs = parseInt(rawDuration, 10);
       }
-      // Niche level — based on global listener count.
-      // Higher listener count = mainstream, lower = niche.
+
+      // Niche level from global listener count
       const listeners = parseInt(info?.track?.listeners || "0", 10);
-      // Map listeners to a "niche %" using log scale, tuned for Last.fm:
-      //   >= 5M listeners → ~5% (mainstream, biggest hits)
-      //   2M listeners    → ~17% (still mainstream territory)
-      //   500k listeners  → ~33% (well-known)
-      //   50k listeners   → ~58% (underground)
-      //   <= 1k listeners → 100% (deep cut)
-      let nichePercent = 0;
       if (listeners > 0) {
         const l = Math.log10(listeners);
-        nichePercent = Math.max(0, Math.min(100, Math.round((7 - l) / 4 * 100)));
+        nichePct = Math.max(0, Math.min(100, Math.round((7 - l) / 4 * 100)));
       } else {
-        nichePercent = 100;
+        nichePct = 100;
       }
-      var nichePct = nichePercent;
+
+      // Genre from top tag — Last.fm tags include genres, moods etc
+      // We try track-level tags first (most specific), fall back to artist tags
+      const trackTags = info?.track?.toptags?.tag;
+      const tags = Array.isArray(trackTags) ? trackTags : (trackTags ? [trackTags] : []);
+
+      // Pick the first sensible tag — filter out non-genre tags
+      const SKIP_TAGS = new Set([
+        "seen live", "favorite", "favourites", "favorites",
+        "favourite songs", "favorite songs", "love", "loved",
+        "spotify", "soundtrack", "albums i own", "owned",
+        "best", "amazing", "awesome", "good", "great", "perfect",
+        "male vocalists", "female vocalists", "vocalists",
+        "singer-songwriter", "singer songwriter",
+      ]);
+      for (const t of tags) {
+        const name = (t.name || "").toLowerCase().trim();
+        if (!name || SKIP_TAGS.has(name) || name.length > 30) continue;
+        if (/^\d{4}s?$/.test(name)) continue;   // skip "00s", "2010s" etc
+        if (/^\d{4}$/.test(name)) continue;     // skip plain years
+        genre = name;
+        break;
+      }
+
+      // If no track-level tag, fall back to artist tags
+      if (!genre) {
+        try {
+          const artistInfo = await lfmGet({
+            method:      "artist.getInfo",
+            artist:      artistName,
+            autocorrect: 1,
+          });
+          const artistTags = artistInfo?.artist?.tags?.tag;
+          const aTags = Array.isArray(artistTags) ? artistTags : (artistTags ? [artistTags] : []);
+          for (const t of aTags) {
+            const name = (t.name || "").toLowerCase().trim();
+            if (!name || SKIP_TAGS.has(name) || name.length > 30) continue;
+            if (/^\d{4}s?$/.test(name)) continue;
+            if (/^\d{4}$/.test(name)) continue;
+            genre = name;
+            break;
+          }
+        } catch (e) { /* ignore */ }
+      }
     } catch (e) {
-      var nichePct = 0;
+      // info lookup failed entirely
     }
 
     res.json({
@@ -265,7 +305,8 @@ app.get("/api/nowplaying", async (req, res) => {
       albumName,
       progressMs: 0,
       durationMs,
-      nichePct,            // 0 = mainstream, 100 = very obscure
+      nichePct,
+      genre,               // top tag from Last.fm e.g. "indie rock", "pop"
     });
   } catch (err) {
     console.error("Last.fm nowplaying error:", err.message);
