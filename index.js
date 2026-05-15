@@ -250,30 +250,62 @@ app.get("/api/nowplaying", async (req, res) => {
         nichePct = 100;
       }
 
-      // Genre from top tag — Last.fm tags include genres, moods etc
-      // We try track-level tags first (most specific), fall back to artist tags
+      // Genre extraction — only accept tags that LOOK like genres.
+      // Last.fm tags are user-generated, so they include random stuff (artist names,
+      // moods, "favourite", years, etc). We use an allow-list of known genre keywords.
+      const GENRE_KEYWORDS = [
+        // broad
+        "pop", "rock", "rap", "hip hop", "hip-hop", "hiphop",
+        "electronic", "edm", "dance", "house", "techno", "trance", "drum and bass", "dnb",
+        "jazz", "blues", "classical", "country", "folk", "metal", "punk", "reggae",
+        "r&b", "rnb", "soul", "funk", "disco", "indie", "alternative", "experimental",
+        "ambient", "acoustic", "instrumental", "k-pop", "kpop", "j-pop", "jpop",
+        "latin", "reggaeton", "afrobeat", "afrobeats", "ska", "gospel", "world",
+        // subgenres
+        "synthwave", "vaporwave", "shoegaze", "dream pop", "lo-fi", "lofi",
+        "trap", "drill", "phonk", "grime", "garage", "dubstep", "breakbeat",
+        "hardcore", "hardstyle", "house music", "deep house", "tech house", "future bass",
+        "psychedelic", "post-rock", "post-punk", "math rock", "emo",
+        "screamo", "metalcore", "deathcore", "death metal", "black metal", "thrash",
+        "doom metal", "stoner", "grunge", "britpop", "new wave", "synth-pop", "synthpop",
+        "bedroom pop", "indie pop", "indie rock", "indie folk", "art pop", "noise pop",
+        "alt rock", "alternative rock", "classic rock", "hard rock", "soft rock", "prog rock",
+        "progressive rock", "psychedelic rock", "garage rock", "surf rock",
+        "boom bap", "conscious hip hop", "alternative hip hop", "underground hip hop",
+        "cloud rap", "mumble rap", "old school hip hop", "g-funk", "gangsta rap",
+        "neo soul", "alternative r&b", "contemporary r&b",
+        "bossa nova", "swing", "bebop", "smooth jazz", "fusion",
+        "baroque", "romantic", "opera", "orchestral", "minimalism",
+        "bluegrass", "americana", "alt-country",
+        "bachata", "salsa", "merengue", "cumbia",
+        "future garage", "uk garage", "footwork", "jersey club",
+        "post-hardcore", "pop punk", "ska punk", "emo rap",
+      ];
+
+      const looksLikeGenre = (name) => {
+        const n = name.toLowerCase().trim();
+        if (!n || n.length > 30) return false;
+        if (/^\d{4}s?$/.test(n)) return false;  // years
+        // Exact match in keyword list
+        for (const g of GENRE_KEYWORDS) {
+          if (n === g) return true;
+        }
+        // Compound genre detection — must contain a genre keyword as a word
+        for (const g of GENRE_KEYWORDS) {
+          const regex = new RegExp("\\b" + g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b");
+          if (regex.test(n)) return true;
+        }
+        return false;
+      };
+
       const trackTags = info?.track?.toptags?.tag;
       const tags = Array.isArray(trackTags) ? trackTags : (trackTags ? [trackTags] : []);
-
-      // Pick the first sensible tag — filter out non-genre tags
-      const SKIP_TAGS = new Set([
-        "seen live", "favorite", "favourites", "favorites",
-        "favourite songs", "favorite songs", "love", "loved",
-        "spotify", "soundtrack", "albums i own", "owned",
-        "best", "amazing", "awesome", "good", "great", "perfect",
-        "male vocalists", "female vocalists", "vocalists",
-        "singer-songwriter", "singer songwriter",
-      ]);
       for (const t of tags) {
-        const name = (t.name || "").toLowerCase().trim();
-        if (!name || SKIP_TAGS.has(name) || name.length > 30) continue;
-        if (/^\d{4}s?$/.test(name)) continue;   // skip "00s", "2010s" etc
-        if (/^\d{4}$/.test(name)) continue;     // skip plain years
-        genre = name;
-        break;
+        const name = (t.name || "").trim();
+        if (looksLikeGenre(name)) { genre = name.toLowerCase(); break; }
       }
 
-      // If no track-level tag, fall back to artist tags
+      // Fall back to artist tags
       if (!genre) {
         try {
           const artistInfo = await lfmGet({
@@ -281,15 +313,11 @@ app.get("/api/nowplaying", async (req, res) => {
             artist:      artistName,
             autocorrect: 1,
           });
-          const artistTags = artistInfo?.artist?.tags?.tag;
-          const aTags = Array.isArray(artistTags) ? artistTags : (artistTags ? [artistTags] : []);
+          const aTagsRaw = artistInfo?.artist?.tags?.tag;
+          const aTags = Array.isArray(aTagsRaw) ? aTagsRaw : (aTagsRaw ? [aTagsRaw] : []);
           for (const t of aTags) {
-            const name = (t.name || "").toLowerCase().trim();
-            if (!name || SKIP_TAGS.has(name) || name.length > 30) continue;
-            if (/^\d{4}s?$/.test(name)) continue;
-            if (/^\d{4}$/.test(name)) continue;
-            genre = name;
-            break;
+            const name = (t.name || "").trim();
+            if (looksLikeGenre(name)) { genre = name.toLowerCase(); break; }
           }
         } catch (e) { /* ignore */ }
       }
