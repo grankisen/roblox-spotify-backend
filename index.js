@@ -319,20 +319,29 @@ app.get("/api/lyrics", async (req, res) => {
   const { artist, track } = req.query;
   if (!artist || !track) return res.json({ found: false, lyrics: "" });
   try {
+    // lyrics.ovh — free, no key needed
     const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(track)}`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    // 404 means not found, 500 means server error — both are non-fatal
     if (!resp.ok) return res.json({ found: false, lyrics: "" });
-    const data = await resp.json();
-    if (!data.lyrics) return res.json({ found: false, lyrics: "" });
-    // Return first 6 lines only (enough to show above the bar)
+    let data;
+    try { data = await resp.json(); } catch { return res.json({ found: false, lyrics: "" }); }
+    if (!data || !data.lyrics || typeof data.lyrics !== "string") {
+      return res.json({ found: false, lyrics: "" });
+    }
+    // Clean up and return first 6 non-empty lines
     const lines = data.lyrics
-      .replace(/\r/g, "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
       .split("\n")
-      .filter(l => l.trim() !== "")
+      .map(l => l.trim())
+      .filter(l => l.length > 0 && !l.startsWith("["))  // skip [Verse], [Chorus] labels
       .slice(0, 6)
       .join("\n");
+    if (!lines) return res.json({ found: false, lyrics: "" });
     res.json({ found: true, lyrics: lines });
   } catch (e) {
+    // Network error or timeout — silently return not found
     res.json({ found: false, lyrics: "" });
   }
 });
