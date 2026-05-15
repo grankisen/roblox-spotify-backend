@@ -312,4 +312,29 @@ app.get("/api/linked", (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
+// ── Lyrics endpoint ──────────────────────────────────────────────────────────
+// Uses lyrics.ovh — free, no API key needed
+// Called by Roblox studio client via HttpService (server-side)
+app.get("/api/lyrics", async (req, res) => {
+  const { artist, track } = req.query;
+  if (!artist || !track) return res.json({ found: false, lyrics: "" });
+  try {
+    const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(track)}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (!resp.ok) return res.json({ found: false, lyrics: "" });
+    const data = await resp.json();
+    if (!data.lyrics) return res.json({ found: false, lyrics: "" });
+    // Return first 6 lines only (enough to show above the bar)
+    const lines = data.lyrics
+      .replace(/\r/g, "")
+      .split("\n")
+      .filter(l => l.trim() !== "")
+      .slice(0, 6)
+      .join("\n");
+    res.json({ found: true, lyrics: lines });
+  } catch (e) {
+    res.json({ found: false, lyrics: "" });
+  }
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
