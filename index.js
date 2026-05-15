@@ -318,42 +318,75 @@ const PORT = process.env.PORT || 3000;
 app.get("/api/lyrics", async (req, res) => {
   const { artist, track } = req.query;
   if (!artist || !track) return res.json({ found: false, lyrics: "" });
+
+  const headers = { "User-Agent": "TheRooftop-RobloxGame/1.0" };
+
+  // Helper: clean raw lyrics text
+  const clean = raw => raw
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 0 && !l.startsWith("["))
+    .slice(0, 24)
+    .join("\n");
+
   try {
-    // lrclib.net — free, no API key, no rate limiting, ~3M songs
-    const url = "https://lrclib.net/api/get?"
+    // First try /api/get-cached which is more forgiving than /api/get
+    // (doesn't require exact duration match)
+    let url = "https://lrclib.net/api/get-cached?"
       + "artist_name=" + encodeURIComponent(artist)
       + "&track_name=" + encodeURIComponent(track);
+    let resp = await fetch(url, { signal: AbortSignal.timeout(6000), headers });
+    let data = resp.ok ? await resp.json().catch(() => null) : null;
 
-    const resp = await fetch(url, {
-      signal: AbortSignal.timeout(5000),
-      headers: { "User-Agent": "TheRooftop-RobloxGame/1.0" }
-    });
+    // If get-cached didn't return useful data, fall back to /api/search
+    if (!data || !data.plainLyrics) {
+      const searchUrl = "https://lrclib.net/api/search?"
+        + "track_name=" + encodeURIComponent(track)
+        + "&artist_name=" + encodeURIComponent(artist);
+      const searchResp = await fetch(searchUrl, { signal: AbortSignal.timeout(6000), headers });
+      if (searchResp.ok) {
+        const results = await searchResp.json().catch(() => []);
+        // Find first result with plain lyrics
+        if (Array.isArray(results) && results.length > 0) {
+          for (const r of results) {
+            if (r.plainLyrics && r.plainLyrics.trim() !== "") {
+              data = r;
+              break;
+            }
+          }
+        }
+      }
+    }
 
-    if (!resp.ok) return res.json({ found: false, lyrics: "" });
+    // Last fallback — search by track name only (helps when artist has special chars)
+    if (!data || !data.plainLyrics) {
+      const searchUrl = "https://lrclib.net/api/search?q=" + encodeURIComponent(track + " " + artist);
+      const searchResp = await fetch(searchUrl, { signal: AbortSignal.timeout(6000), headers });
+      if (searchResp.ok) {
+        const results = await searchResp.json().catch(() => []);
+        if (Array.isArray(results)) {
+          for (const r of results) {
+            if (r.plainLyrics && r.plainLyrics.trim() !== "") {
+              data = r;
+              break;
+            }
+          }
+        }
+      }
+    }
 
-    let data;
-    try { data = await resp.json(); } catch { return res.json({ found: false, lyrics: "" }); }
+    if (!data || data.instrumental || !data.plainLyrics) {
+      return res.json({ found: false, lyrics: "" });
+    }
 
-    if (!data || data.instrumental) return res.json({ found: false, lyrics: "" });
-
-    // Prefer plain lyrics (no timestamps)
-    const raw = data.plainLyrics || "";
-    if (!raw) return res.json({ found: false, lyrics: "" });
-
-    // Return first 6 non-empty lines, skip section labels like [Chorus]
-    const lines = raw
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .split("\n")
-      .map(l => l.trim())
-      .filter(l => l.length > 0 && !l.startsWith("["))
-      .slice(0, 24)
-      .join("\n");
-
+    const lines = clean(data.plainLyrics);
     if (!lines) return res.json({ found: false, lyrics: "" });
-    res.json({ found: true, lyrics: lines });
 
+    res.json({ found: true, lyrics: lines });
   } catch (e) {
+    console.error("[lyrics] error:", e.message);
     res.json({ found: false, lyrics: "" });
   }
 });
