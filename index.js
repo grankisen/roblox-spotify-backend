@@ -319,29 +319,41 @@ app.get("/api/lyrics", async (req, res) => {
   const { artist, track } = req.query;
   if (!artist || !track) return res.json({ found: false, lyrics: "" });
   try {
-    // lyrics.ovh — free, no key needed
-    const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(track)}`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    // 404 means not found, 500 means server error — both are non-fatal
+    // lrclib.net — free, no API key, no rate limiting, ~3M songs
+    const url = "https://lrclib.net/api/get?"
+      + "artist_name=" + encodeURIComponent(artist)
+      + "&track_name=" + encodeURIComponent(track);
+
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(5000),
+      headers: { "User-Agent": "TheRooftop-RobloxGame/1.0" }
+    });
+
     if (!resp.ok) return res.json({ found: false, lyrics: "" });
+
     let data;
     try { data = await resp.json(); } catch { return res.json({ found: false, lyrics: "" }); }
-    if (!data || !data.lyrics || typeof data.lyrics !== "string") {
-      return res.json({ found: false, lyrics: "" });
-    }
-    // Clean up and return first 6 non-empty lines
-    const lines = data.lyrics
+
+    if (!data || data.instrumental) return res.json({ found: false, lyrics: "" });
+
+    // Prefer plain lyrics (no timestamps)
+    const raw = data.plainLyrics || "";
+    if (!raw) return res.json({ found: false, lyrics: "" });
+
+    // Return first 6 non-empty lines, skip section labels like [Chorus]
+    const lines = raw
       .replace(/\r\n/g, "\n")
       .replace(/\r/g, "\n")
       .split("\n")
       .map(l => l.trim())
-      .filter(l => l.length > 0 && !l.startsWith("["))  // skip [Verse], [Chorus] labels
+      .filter(l => l.length > 0 && !l.startsWith("["))
       .slice(0, 6)
       .join("\n");
+
     if (!lines) return res.json({ found: false, lyrics: "" });
     res.json({ found: true, lyrics: lines });
+
   } catch (e) {
-    // Network error or timeout — silently return not found
     res.json({ found: false, lyrics: "" });
   }
 });
